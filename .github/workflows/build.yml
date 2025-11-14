@@ -1,0 +1,112 @@
+name: "Ada-like-Zig — Build + ProofLedger + Auto Release"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "example.adazig"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ada-like-zig-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-3os:
+    name: "Build — ${{ matrix.os }}"
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ---------------------------------------------
+      #  Install Zig (cross-OS safe)
+      # ---------------------------------------------
+      - name: Install Zig
+        uses: mlugg/setup-zig@v1
+        with:
+          version: "0.12.0"
+
+      # ---------------------------------------------
+      #  Build (Ubuntu == real build)
+      # ---------------------------------------------
+      - name: Build (Ubuntu Only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          zig version
+          zig build-exe src/main.zig -O ReleaseSafe -fstrip -fcolor=on
+          mv main ada-like-zig-linux
+
+      # ---------------------------------------------
+      #  Build Skip for non-Ubuntu
+      # ---------------------------------------------
+      - name: Skip Build (non-Ubuntu)
+        if: matrix.os != 'ubuntu-latest'
+        run: |
+          echo "Build skipped for ${{ matrix.os }}" > skip.txt
+
+      # ---------------------------------------------
+      #  ProofLedger (OS-aware)
+      # ---------------------------------------------
+      - name: Generate ProofLedger (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          echo "Repository: Ada-like-Zig" > proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+          echo "Commit: ${{ github.sha }}" >> proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+          echo "OS: Linux" >> proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+          echo "Time: $(date)" >> proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+
+      - name: Generate ProofLedger (Non-Ubuntu)
+        if: matrix.os != 'ubuntu-latest'
+        run: |
+          echo "Repository: Ada-like-Zig" > proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+          echo "Build: SKIPPED" >> proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+
+      # ---------------------------------------------
+      #  Upload artifacts
+      # ---------------------------------------------
+      - name: Upload Linux Binary
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ada-like-zig-linux-${{ github.sha }}
+          path: ada-like-zig-linux
+
+      - name: Upload ProofLedger
+        uses: actions/upload-artifact@v4
+        with:
+          name: proofledger-${{ matrix.os }}-${{ github.sha }}
+          path: proofledger-${{ matrix.os }}-${{ github.sha }}.txt
+
+  # ---------------------------------------------------
+  #  Auto Release Job
+  #  → Only runs if src/ or example.adazig changed
+  # ---------------------------------------------------
+  release:
+    needs: build-3os
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: auto-${{ github.sha }}
+          name: "Auto Release — ${{ github.sha }}"
+          files: artifacts/**
